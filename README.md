@@ -2,7 +2,17 @@
 
 **Optimized Human Segmentation Library for NVIDIA Jetson Orin Nano**
 
-JetSeg is a lightweight, high-performance Python library for real-time human segmentation. It is powered by **TensorRT (via ONNX Runtime)** to leverage the DLA/GPU capabilities of NVIDIA Jetson devices, achieving significantly lower latency compared to standard CPU inference.
+JetSeg is a lightweight, high-performance Python library designed specifically for **real-time human segmentation**. It is powered by **TensorRT (via ONNX Runtime)** to leverage the DLA/GPU capabilities of NVIDIA Jetson devices, achieving significantly lower latency compared to standard CPU inference.
+
+> **Note:** This package is specialized for **Human Segmentation** tasks, optimized for edge devices like Jetson Orin Nano.
+
+## 🖼️ Visualization
+
+See JetSeg in action. The library takes a raw input image and produces a precise binary mask or a background-removed result.
+
+| **Raw Input** | **Prediction Result** |
+|:---:|:---:|
+|  |  |
 
 ## ✨ Features
 
@@ -21,6 +31,11 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 3. **Dependencies:**
    * Python 3.8+
    * **onnxruntime-gpu**: This must be installed specifically for Jetson (JetPack version). Current wheel on libs folder.
+
+   ```bash
+   # Install onnxruntime-gpu from Jetson Zoo (if not already installed)
+   pip install onnxruntime-gpu --extra-index-url [https://pypi.jetson.ai](https://pypi.jetson.ai)
+   ```
 
    *Note: Standard `pip install onnxruntime-gpu` usually pulls the x86 version which won't utilize Jetson's GPU correctly.*
 
