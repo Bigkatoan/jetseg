@@ -12,7 +12,7 @@ See JetSeg in action. The library takes a raw input image and produces a precise
 
 | **Raw Input** | **Prediction Result** |
 |:---:|:---:|
-|  |  |
+| ![Raw Input](image.jpg) | ![Prediction Result](predict.jpg) |
 
 ## ✨ Features
 
