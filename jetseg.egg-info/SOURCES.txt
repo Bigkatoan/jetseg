@@ -1,0 +1,10 @@
+MANIFEST.in
+setup.py
+jetseg/__init__.py
+jetseg/engine.py
+jetseg/human_seg.onnx
+jetseg.egg-info/PKG-INFO
+jetseg.egg-info/SOURCES.txt
+jetseg.egg-info/dependency_links.txt
+jetseg.egg-info/requires.txt
+jetseg.egg-info/top_level.txt
