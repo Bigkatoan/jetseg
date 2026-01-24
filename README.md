@@ -28,13 +28,12 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 
 ### Option 1: Install from Wheel (Recommended)
 
-If you have the `.whl` file:
-
 ```bash
+cd dist
 pip install jetseg-1.0.0-py3-none-any.whl --force-reinstall
 ```
 
-### Option 2: Install from Source (For Developers)
+### Option 2: Install from Source (For Developers and Other Platforms)
 
 Clone the repository and install in editable mode:
 
