@@ -20,12 +20,7 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 2. **JetPack:** 5.x or 6.x recommended.
 3. **Dependencies:**
    * Python 3.8+
-   * **onnxruntime-gpu**: This must be installed specifically for Jetson (JetPack version).
-
-   ```bash
-   # Install onnxruntime-gpu from Jetson Zoo (if not already installed)
-   pip install onnxruntime-gpu --extra-index-url [https://pypi.jetson.ai](https://pypi.jetson.ai)
-   ```
+   * **onnxruntime-gpu**: This must be installed specifically for Jetson (JetPack version). Current wheel on libs folder.
 
    *Note: Standard `pip install onnxruntime-gpu` usually pulls the x86 version which won't utilize Jetson's GPU correctly.*
 
