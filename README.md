@@ -47,8 +47,15 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 cd dist
 pip install jetseg-1.0.0-py3-none-any.whl --force-reinstall
 ```
+### Option 2: Install from git
 
-### Option 2: Install from Source (For Developers and Other Platforms)
+Clone the repository and install in editable mode:
+
+```bash
+pip install git+https://github.com/Bigkatoan/jetseg
+```
+
+### Option 3: Install from Source (For Developers and Other Platforms)
 
 Clone the repository and install in editable mode:
 
