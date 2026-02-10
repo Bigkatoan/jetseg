@@ -34,7 +34,7 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 
    ```bash
    # Install onnxruntime-gpu from Jetson Zoo (if not already installed)
-   pip install onnxruntime-gpu --extra-index-url [https://pypi.jetson.ai](https://pypi.jetson.ai)
+   pip install onnxruntime-gpu --extra-index-url
    ```
 
    *Note: Standard `pip install onnxruntime-gpu` usually pulls the x86 version which won't utilize Jetson's GPU correctly.*
