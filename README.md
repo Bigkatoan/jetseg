@@ -136,6 +136,21 @@ seg = HumanSeg(use_fp16=False)
 
 ## ⚠️ Troubleshooting
 
+## ✍️ Adding / Exporting Optimized Models (PyTorch -> ONNX)
+
+You can train or modify a PyTorch model and export it to an ONNX file that JetSeg will load. A lightweight optimized UNet implementation is included at `jetseg/models/optimized_unet.py`.
+
+To export a PyTorch model (or a fresh initialized model) to the bundled ONNX path run:
+
+```bash
+python3 export_onnx.py --ckpt path/to/checkpoint.pth --image-size 224
+```
+
+This will write the ONNX model to `jetseg/human_seg.onnx` (used by the runtime). Use `--out` to change the output path.
+
+The exported ONNX uses opset 11 and is compatible with ONNX Runtime + TensorRT on Jetson devices.
+
+
 **1. "TensorRT Provider not found" or "Shared object file not found"**
 
 Make sure CUDA libraries are in your path. Add this to your `~/.bashrc`:
