@@ -1,0 +1,7 @@
+{
+  "task": "humanseg",
+  "model_name": "manifest",
+  "input_size": 480,
+  "opset": 11,
+  "artifacts": []
+}

@@ -1,0 +1,12 @@
+{
+  "task": "humanseg",
+  "model_name": "unet_best",
+  "input_size": 480,
+  "opset": 11,
+  "artifacts": [
+    "unet_best.pt",
+    "unet_best_fp16.onnx",
+    "unet_best_fp32.onnx",
+    "unet_best_int8.onnx"
+  ]
+}

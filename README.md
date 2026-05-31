@@ -204,3 +204,7 @@ Notes:
 - `HumanSeg.from_registry()` will pick a sensible default variant (prefer `fp16` -> `fp32` -> `int8` -> `pth`) but you can force a variant.
 - The migration script `scripts/migrate_backups_to_store.py` can migrate existing `jetseg/jetseg/backups/` content into the new store layout.
 
+## Available Models
+
+A generated list of models is available at [jetseg/docs/models.md](jetseg/docs/models.md). Run `tools/generate_model_list.py` to refresh.
+

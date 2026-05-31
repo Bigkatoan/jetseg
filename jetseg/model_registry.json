@@ -3,24 +3,24 @@
     "default": "unet_best",
     "models": {
       "unet_best": {
-        "description": "COCO2017-trained UNet (best checkpoint) converted to ONNX + quantized variants",
+        "description": "Converted from checkpoint unet_best.pt",
         "input_size": 480,
         "variants": {
-          "fp32": "backups/unet_best_fp32.onnx",
-          "fp16": "backups/unet_best_fp16.onnx",
-          "int8": "backups/unet_best_int8.onnx",
-          "pth": "backups/unet_best.pt"
+          "pth": "model_store/humanseg/unet_best/unet_best.pt",
+          "fp16": "model_store/humanseg/unet_best/unet_best_fp16.onnx",
+          "fp32": "model_store/humanseg/unet_best/unet_best_fp32.onnx",
+          "int8": "model_store/humanseg/unet_best/unet_best_int8.onnx"
         },
         "version": "v1"
       },
       "unet_last": {
-        "description": "Last checkpoint converted",
+        "description": "Converted from checkpoint unet_last.pt",
         "input_size": 480,
         "variants": {
-          "fp32": "backups/unet_last_fp32.onnx",
-          "fp16": "backups/unet_last_fp16.onnx",
-          "int8": "backups/unet_last_int8.onnx",
-          "pth": "backups/unet_last.pt"
+          "pth": "model_store/humanseg/unet_last/unet_last.pt",
+          "fp16": "model_store/humanseg/unet_last/unet_last_fp16.onnx",
+          "fp32": "model_store/humanseg/unet_last/unet_last_fp32.onnx",
+          "int8": "model_store/humanseg/unet_last/unet_last_int8.onnx"
         },
         "version": "v1"
       }

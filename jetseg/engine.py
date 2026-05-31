@@ -31,6 +31,22 @@ class HumanSeg:
         if model_path is not None:
             # allow callers to pass an explicit ONNX/PTH path
             self.model_path = str(model_path)
+        else:
+            # Best-effort: prefer a registry-provided default model for the `humanseg` task
+            # This keeps backward-compatibility if the registry is missing or resolution fails.
+            try:
+                from . import registry
+                reg = registry.load_registry()
+                model_name = reg.get("humanseg", {}).get("default")
+                if model_name:
+                    variant = registry.get_default_variant("humanseg", model_name)
+                    mp = registry.get_model_path("humanseg", model_name, variant)
+                    if mp.exists():
+                        self.model_path = str(mp)
+                        logger.debug("Using registry default model for humanseg: %s", self.model_path)
+            except Exception:
+                # keep bundled model if registry isn't available or resolution fails
+                pass
 
         def _choose_onnx_variant(base_path: str, prefer_fp16: bool) -> str:
             """Look for device-optimized ONNX variants next to the base model.
