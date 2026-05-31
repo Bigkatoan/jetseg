@@ -1,0 +1,29 @@
+{
+  "humanseg": {
+    "default": "unet_best",
+    "models": {
+      "unet_best": {
+        "description": "COCO2017-trained UNet (best checkpoint) converted to ONNX + quantized variants",
+        "input_size": 480,
+        "variants": {
+          "fp32": "backups/unet_best_fp32.onnx",
+          "fp16": "backups/unet_best_fp16.onnx",
+          "int8": "backups/unet_best_int8.onnx",
+          "pth": "backups/unet_best.pt"
+        },
+        "version": "v1"
+      },
+      "unet_last": {
+        "description": "Last checkpoint converted",
+        "input_size": 480,
+        "variants": {
+          "fp32": "backups/unet_last_fp32.onnx",
+          "fp16": "backups/unet_last_fp16.onnx",
+          "int8": "backups/unet_last_int8.onnx",
+          "pth": "backups/unet_last.pt"
+        },
+        "version": "v1"
+      }
+    }
+  }
+}

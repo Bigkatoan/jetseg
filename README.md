@@ -167,3 +167,40 @@ If the library cannot create `~/.cache/jetseg`, try running with appropriate use
 ## 📝 License
 
 [MIT](https://choosealicense.com/licenses/mit/)
+
+## Model Store / How to add or update models
+
+JetSeg now includes a simple model store and registry to manage multiple converted artifacts per task.
+
+Layout (inside the package):
+
+- `jetseg/jetseg/model_store/<task>/<model_name>/` — contains ONNX/PTH artifacts, `manifest.json` and `metadata.json`.
+- `jetseg/jetseg/model_registry.json` — registry mapping tasks -> models -> variant paths (relative to `jetseg/jetseg`).
+
+Quick workflow to add a new model (recommended):
+
+1. Train and produce a checkpoint `my_model.pt`.
+2. Convert and place artifacts into the model store using the helper:
+
+```bash
+python3 convert_backups.py --src /path/to/my_model.pt --out-dir jetseg/jetseg/model_store --task humanseg --model-name my_model --image-size 480 --register
+```
+
+3. The script will produce `model_store/humanseg/my_model/` with `*_fp32.onnx`, optional `*_fp16.onnx` and `*_int8.onnx`, plus `manifest.json` and `metadata.json`.
+
+4. If `--register` was used, `jetseg/jetseg/model_registry.json` is updated with relative paths pointing into the package. Otherwise, edit the registry manually.
+
+5. Use the registry loader in code:
+
+```python
+from jetseg import HumanSeg
+# load default variant from registry
+seg = HumanSeg.from_registry('humanseg', 'my_model', backend='onnx')
+```
+
+Notes:
+
+- The registry stores relative paths from the package folder, e.g. `model_store/humanseg/my_model/my_model_fp32.onnx`.
+- `HumanSeg.from_registry()` will pick a sensible default variant (prefer `fp16` -> `fp32` -> `int8` -> `pth`) but you can force a variant.
+- The migration script `scripts/migrate_backups_to_store.py` can migrate existing `jetseg/jetseg/backups/` content into the new store layout.
+

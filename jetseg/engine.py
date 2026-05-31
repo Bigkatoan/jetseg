@@ -15,7 +15,7 @@ logger = logging.getLogger("jetseg")
 
 
 class HumanSeg:
-    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None):
+    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None, model_path: str | None = None):
         """
         Initialize JetSeg HumanSeg engine.
         :param use_fp16: enable FP16 for providers that support it (useful on Jetson/TensorRT)
@@ -25,9 +25,64 @@ class HumanSeg:
         :param input_size: tuple (W,H) to override model input size
         :param torch_device: explicit torch device name (e.g., 'cuda' or 'cpu') if using torch backend
         """
-        # 1. locate bundled ONNX model inside the package
+        # 1. locate bundled ONNX model inside the package (can be overridden)
         current_dir = os.path.dirname(__file__)
         self.model_path = os.path.join(current_dir, "human_seg.onnx")
+        if model_path is not None:
+            # allow callers to pass an explicit ONNX/PTH path
+            self.model_path = str(model_path)
+
+        def _choose_onnx_variant(base_path: str, prefer_fp16: bool) -> str:
+            """Look for device-optimized ONNX variants next to the base model.
+
+            Priority (best-effort):
+              - If TensorRT available and fp16 variant exists -> use fp16
+              - If prefer_fp16 and fp16 exists -> use fp16
+              - If CPU-only and int8 exists -> use int8
+              - If fp32 variant exists -> use it
+              - Else return base_path
+            """
+            from pathlib import Path
+
+            base = Path(base_path)
+            stem = base.stem
+            dirp = base.parent
+
+            fp16 = dirp / f"{stem}_fp16.onnx"
+            fp32 = dirp / f"{stem}_fp32.onnx"
+            int8 = dirp / f"{stem}_int8.onnx"
+            legacy = base
+
+            # check providers
+            try:
+                providers = ort.get_available_providers()
+            except Exception:
+                providers = []
+
+            trt_provider = next((p for p in providers if 'Tensorrt' in p or 'TensorRT' in p), None)
+
+            # TensorRT + fp16
+            if trt_provider and fp16.exists():
+                logger.info("Using model variant: %s (TensorRT/FP16)", fp16.name)
+                return str(fp16)
+
+            # prefer fp16 if requested
+            if prefer_fp16 and fp16.exists():
+                logger.info("Using model variant: %s (FP16)", fp16.name)
+                return str(fp16)
+
+            # CPU prefer int8
+            if 'CPUExecutionProvider' in providers and int8.exists():
+                logger.info("Using model variant: %s (INT8)", int8.name)
+                return str(int8)
+
+            if fp32.exists():
+                logger.info("Using model variant: %s (FP32)", fp32.name)
+                return str(fp32)
+
+            # fallback to given base
+            return str(legacy)
+
 
         # allow overriding expected input size
         if input_size is not None:
@@ -73,6 +128,8 @@ class HumanSeg:
         self.torch_device = None
 
         if self.backend == "onnx":
+            # allow selecting fp16/int8/fp32 variants if present
+            self.model_path = _choose_onnx_variant(self.model_path, use_fp16)
             if not os.path.exists(self.model_path):
                 raise FileNotFoundError(f"CRITICAL: ONNX model not found at {self.model_path}")
 
@@ -141,6 +198,52 @@ class HumanSeg:
 
         else:
             raise ValueError(f"Unknown backend: {self.backend}")
+
+    @classmethod
+    def from_registry(cls, task: str = "humanseg", model_name: str | None = None, variant: str | None = None, backend: str = "onnx", use_fp16: bool = True, cache_dir: str | None = None, torch_device: str | None = None, input_size: tuple | None = None):
+        """Construct a HumanSeg instance from the package model registry.
+
+        :param task: task name in the registry (e.g., 'humanseg')
+        :param model_name: specific model name (if omitted uses registry default)
+        :param variant: variant to use (fp32/fp16/int8/pth). If omitted the registry default is chosen.
+        :param backend: 'onnx' or 'torch'
+        """
+        try:
+            from . import registry
+        except Exception as e:
+            raise RuntimeError(f"Failed to import registry: {e}")
+
+        # resolve model_name default
+        reg = registry.load_registry()
+        if task not in reg:
+            raise KeyError(f"Unknown task in registry: {task}")
+        task_entry = reg[task]
+        if model_name is None:
+            model_name = task_entry.get("default")
+
+        # resolve variant
+        if variant is None:
+            variant = registry.get_default_variant(task, model_name)
+
+        # get artifact path
+        model_path = registry.get_model_path(task, model_name, variant)
+
+        # instantiate
+        if backend == "onnx":
+            return cls(use_fp16=use_fp16, cache_dir=cache_dir, backend="onnx", input_size=input_size, torch_device=torch_device, model_path=str(model_path))
+        elif backend == "torch":
+            # prefer a pth variant for torch backend
+            if model_path.suffix in (".pt", ".pth"):
+                return cls(use_fp16=use_fp16, cache_dir=cache_dir, backend="torch", torch_model_path=str(model_path), input_size=input_size, torch_device=torch_device)
+            else:
+                # try to locate pth variant
+                try:
+                    pth_path = registry.get_model_path(task, model_name, "pth")
+                    return cls(use_fp16=use_fp16, cache_dir=cache_dir, backend="torch", torch_model_path=str(pth_path), input_size=input_size, torch_device=torch_device)
+                except Exception:
+                    raise RuntimeError("Requested torch backend but no .pt/.pth variant available for the selected model")
+        else:
+            raise ValueError(f"Unsupported backend: {backend}")
 
     def predict(self, image, threshold=0.5):
         if image is None:

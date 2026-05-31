@@ -91,7 +91,10 @@ def try_convert_fp16(fp32_path: Path, out_path: Path):
 def main():
     p = argparse.ArgumentParser()
     p.add_argument("--src", default=str(Path.home() / "UNET" / "backup"), help="source checkpoint file or directory")
-    p.add_argument("--out-dir", default="jetseg/jetseg/backups", help="output directory inside jetseg package")
+    p.add_argument("--out-dir", default="jetseg/jetseg/model_store", help="output directory inside jetseg package (model store root)")
+    p.add_argument("--task", default="humanseg", help="task name for registry (e.g., humanseg)")
+    p.add_argument("--model-name", default=None, help="explicit model name (defaults to checkpoint stem)")
+    p.add_argument("--register", action="store_true", help="update jetseg/jetseg/model_registry.json with new model entry")
     p.add_argument("--image-size", type=int, default=480, help="export ONNX with this input size (square)")
     p.add_argument("--opset", type=int, default=11)
     args = p.parse_args()
@@ -99,6 +102,7 @@ def main():
     src = Path(args.src)
     out_dir = Path(args.out_dir)
     out_dir.mkdir(parents=True, exist_ok=True)
+    task_name = args.task
 
     # gather checkpoint files
     cks = []
@@ -128,7 +132,11 @@ def main():
 
     for ck in cks:
         print("Processing checkpoint:", ck)
-        dest_ck = out_dir / ck.name
+        base_name = ck.stem
+        model_name = args.model_name or base_name
+        model_dir = out_dir / task_name / model_name
+        model_dir.mkdir(parents=True, exist_ok=True)
+        dest_ck = model_dir / ck.name
         shutil.copy2(ck, dest_ck)
         print("Copied checkpoint to", dest_ck)
 
@@ -193,8 +201,8 @@ def main():
         wrapper = SigmoidWrapper(model, probs_already=probs_already)
 
         # export FP32 ONNX
-        base_name = ck.stem
-        out_fp32 = out_dir / f"{base_name}_fp32.onnx"
+        # export artifacts into the model-specific folder
+        out_fp32 = model_dir / f"{model_name}_fp32.onnx"
         print("Exporting ONNX (FP32) to", out_fp32)
         try:
             export_to_onnx(wrapper, args.image_size, out_fp32, opset=args.opset)
@@ -204,33 +212,97 @@ def main():
             continue
 
         # try FP16 conversion
-        out_fp16 = out_dir / f"{base_name}_fp16.onnx"
+        out_fp16 = model_dir / f"{model_name}_fp16.onnx"
         if try_convert_fp16(out_fp32, out_fp16):
             print("Saved FP16 ONNX ->", out_fp16)
         else:
             print("FP16 conversion not available; skip")
 
         # try dynamic quantization to INT8 (for CPU)
-        out_int8 = out_dir / f"{base_name}_int8.onnx"
+        out_int8 = model_dir / f"{model_name}_int8.onnx"
         if try_quantize_dynamic(out_fp32, out_int8):
             print("Saved dynamic-quantized INT8 ONNX ->", out_int8)
         else:
             print("Dynamic quantization unavailable or failed; skip")
 
-    # create a simple manifest
-    manifest = {"models": []}
-    for p in sorted(out_dir.iterdir()):
-        if p.suffix == ".onnx" or p.suffix in (".pt", ".pth"):
-            manifest["models"].append(str(p.name))
+    # For each model folder create a manifest & optionally register the model
+    import json
+    pkg_root = Path(__file__).parent / "jetseg"
+    registry_path = pkg_root / "model_registry.json"
 
-    try:
-        import json
+    for model_folder in sorted((out_dir / task_name).iterdir() if (out_dir / task_name).exists() else []):
+        mf = model_folder
+        manifest = {"models": []}
+        for p in sorted(mf.iterdir()):
+            if p.suffix == ".onnx" or p.suffix in (".pt", ".pth"):
+                manifest["models"].append(str(p.name))
+        try:
+            with open(mf / "manifest.json", "w") as f:
+                json.dump(manifest, f, indent=2)
+            print("Wrote manifest.json for", mf)
+        except Exception as e:
+            print("Failed to write manifest for", mf, e)
 
-        with open(out_dir / "manifest.json", "w") as f:
-            json.dump(manifest, f, indent=2)
-        print("Wrote manifest.json")
-    except Exception:
-        pass
+        # write metadata.json
+        try:
+            metadata = {
+                "task": task_name,
+                "model_name": mf.name,
+                "input_size": args.image_size,
+                "opset": args.opset,
+                "artifacts": manifest["models"],
+            }
+            with open(mf / "metadata.json", "w") as f:
+                json.dump(metadata, f, indent=2)
+            print("Wrote metadata.json for", mf)
+        except Exception as e:
+            print("Failed to write metadata for", mf, e)
+
+        # optionally update registry with relative paths
+        if args.register:
+            if not registry_path.exists():
+                print("Registry not found at", registry_path, "- skipping registration")
+            else:
+                try:
+                    with open(registry_path, "r", encoding="utf-8") as f:
+                        reg = json.load(f)
+                except Exception as e:
+                    print("Failed to read registry:", e)
+                    reg = {}
+
+                if task_name not in reg:
+                    reg[task_name] = {"default": mf.name, "models": {}}
+                models = reg[task_name].setdefault("models", {})
+
+                # build variants mapping relative to package folder (jetseg/jetseg)
+                variants = {}
+                for art in manifest["models"]:
+                    if art.endswith("_fp32.onnx"):
+                        variants["fp32"] = f"model_store/{task_name}/{mf.name}/{art}"
+                    elif art.endswith("_fp16.onnx"):
+                        variants["fp16"] = f"model_store/{task_name}/{mf.name}/{art}"
+                    elif art.endswith("_int8.onnx"):
+                        variants["int8"] = f"model_store/{task_name}/{mf.name}/{art}"
+                    elif art.endswith(".pt") or art.endswith(".pth"):
+                        variants["pth"] = f"model_store/{task_name}/{mf.name}/{art}"
+
+                models[mf.name] = {
+                    "description": f"Converted from checkpoint {dest_ck.name}",
+                    "input_size": args.image_size,
+                    "variants": variants,
+                    "version": "v1",
+                }
+
+                # ensure default exists
+                if not reg[task_name].get("default"):
+                    reg[task_name]["default"] = mf.name
+
+                try:
+                    with open(registry_path, "w", encoding="utf-8") as f:
+                        json.dump(reg, f, indent=2)
+                    print("Updated registry at", registry_path)
+                except Exception as e:
+                    print("Failed to update registry:", e)
 
 
 if __name__ == "__main__":
