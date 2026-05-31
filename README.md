@@ -39,6 +39,35 @@ Before installing `jetseg`, ensure your Jetson environment is set up:
 
    *Note: Standard `pip install onnxruntime-gpu` usually pulls the x86 version which won't utilize Jetson's GPU correctly.*
 
+## 🔐 Model storage & Git LFS
+
+This repository stores large model artifacts (ONNX / PyTorch files) inside `jetseg/jetseg/model_store/` and uses Git LFS to keep the repository lightweight while tracking them in Git. After cloning, run:
+
+```bash
+git lfs install
+git lfs pull --include="jetseg/jetseg/model_store/**"
+```
+
+If you are a maintainer and you add new model files, track them with:
+
+```bash
+git lfs track "jetseg/jetseg/model_store/**"
+git add .gitattributes
+git add <your-model-files>
+git commit -m "Add model files (tracked by LFS)"
+```
+
+### Platform-specific ONNX Runtime (Jetson)
+
+We include a Jetson-specific `onnxruntime_gpu` wheel in `libs/` for convenience. Do NOT include platform wheels in Python package releases — they are intentionally excluded from the sdist/wheel. To install the Jetson wheel locally:
+
+```bash
+# example (adjust filename to match file in libs/)
+pip install libs/onnxruntime_gpu-1.23.0-cp310-cp310-linux_aarch64.whl
+```
+
+See the "On-device quantization" section below for how to prepare device-optimized variants.
+
 ## 📦 Installation
 
 ### Option 1: Install from Wheel (Recommended)
@@ -109,6 +138,49 @@ mask = seg.predict(image, threshold=0.5)
 cv2.imwrite("mask_output.jpg", mask)
 print("Done!")
 ```
+
+## 🎯 Project targets and supported model types
+
+JetSeg aims to support multiple deployment targets and model variants:
+
+- Edge GPU (NVIDIA Jetson family — Orin, AGX, Nano): targeted FP16/TensorRT engines
+- Edge CPU (Raspberry Pi 5, ARM64): targeted INT8 dynamic/static quantized variants
+- Desktop/server (x86_64): FP32 or FP16 as appropriate
+
+Models are typically provided in three flavors: `*_fp32.onnx`, `*_fp16.onnx`, and `*_int8.onnx`. The runtime will pick the best available variant based on the device and available ONNX Runtime providers. Use the quantize helpers to generate device-optimized variants locally when needed.
+
+## Inference scripts (multi-model)
+
+Two high-level scripts are provided to make multi-model inference and experimentation convenient:
+
+- `scripts/list_models.py` — enumerate models and available variants under `jetseg/jetseg/model_store/`.
+- `scripts/run_inference_multi_model.py` — run inference across multiple models/variants and save per-model outputs under `images/results_multi/`.
+
+Examples
+
+List all models (humanseg task):
+
+```bash
+python scripts/list_models.py
+```
+
+Run all `humanseg` models on images in `images/` and store outputs:
+
+```bash
+python scripts/run_inference_multi_model.py --task humanseg --input images/ --output images/results_multi/
+```
+
+Run a specific model (e.g., `human_seg_tiny`) and skip on-device quantization:
+
+```bash
+python scripts/run_inference_multi_model.py --task humanseg --models human_seg_tiny --no-quantize
+```
+
+Notes:
+
+- The demo scripts assume you run them from the repository root (or that `PYTHONPATH=.` is set).
+- `run_inference_multi_model.py` will instantiate `HumanSeg` per model; the engine will attempt to pick device-optimized variants automatically and — unless `--no-quantize` is specified — will prompt to quantize when a cached variant is missing (interactive TTY only).
+
 
 ## ⚙️ Configuration & Performance
 
@@ -207,4 +279,31 @@ Notes:
 ## Available Models
 
 A generated list of models is available at [jetseg/docs/models.md](jetseg/docs/models.md). Run `tools/generate_model_list.py` to refresh.
+
+## README Examples
+
+The repository includes a small set of generated README examples showing overlay visualizations and a compact model table. Example images are saved to `images/readme_examples/` and are produced by `scripts/generate_readme_examples.py`.
+
+To (re)generate the examples locally:
+
+```bash
+PYTHONPATH=. python3 scripts/generate_readme_examples.py --no-quantize
+```
+
+Notes:
+- The script will produce overlay composites (single-image visualizations) by default and print a compact markdown table summarizing input/output shapes, parameter counts and a short recommendation.
+- INT8 variants may fail on CPU because not all providers implement quantized ops (e.g., ConvInteger). The generator will skip non-runnable variants and log warnings.
+- PyTorch checkpoint (`.pt`/`.pth`) variants may not always load into the bundled `UNetOptimized` architecture; those are skipped with a warning.
+
+Generated model table (example):
+
+| Task | Model | Variant | Input | Output | Params | Mem(MB) | Rec |
+| --- | --- | --- | --- | --- | --- | --- | --- |
+| humanseg | human_seg_large | fp32 | 224x224x3 (NHWC) | 1x224x224x1 | 7.76M | 29.6 | Low |
+| humanseg | human_seg_tiny | pth | - | - | 0 | 0.0 | Low |
+| humanseg | human_seg_tiny | fp16 | 480x480x3 (NCHW) | 1x1x480x480 | 248.7k | 0.5 | Low |
+| humanseg | human_seg_tiny | fp32 | 480x480x3 (NCHW) | 1x1x480x480 | 248.7k | 0.9 | Low |
+| humanseg | human_seg_tiny | int8 | 480x480x3 (NCHW) | 1x1x480x480 | 248.8k | 0.2 | Low |
+
+See `images/readme_examples/` for the generated overlays used in the README.
 

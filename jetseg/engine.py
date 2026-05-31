@@ -3,6 +3,7 @@ import onnxruntime as ort
 import numpy as np
 import cv2
 import os
+import sys
 from pathlib import Path
 
 try:
@@ -15,7 +16,7 @@ logger = logging.getLogger("jetseg")
 
 
 class HumanSeg:
-    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None, model_path: str | None = None):
+    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None, model_path: str | None = None, auto_quantize: bool = True, no_quantize: bool = False):
         """
         Initialize JetSeg HumanSeg engine.
         :param use_fp16: enable FP16 for providers that support it (useful on Jetson/TensorRT)
@@ -28,6 +29,9 @@ class HumanSeg:
         # 1. locate bundled ONNX model inside the package (can be overridden)
         current_dir = os.path.dirname(__file__)
         self.model_path = os.path.join(current_dir, "human_seg.onnx")
+        # quantize flags
+        self.auto_quantize = bool(auto_quantize)
+        self.no_quantize = bool(no_quantize)
         if model_path is not None:
             # allow callers to pass an explicit ONNX/PTH path
             self.model_path = str(model_path)
@@ -144,6 +148,21 @@ class HumanSeg:
         self.torch_device = None
 
         if self.backend == "onnx":
+            # attempt auto-quantization if enabled (may replace self.model_path)
+            if self.auto_quantize and not self.no_quantize:
+                try:
+                    from . import quantize as quantize_mod
+                except Exception:
+                    quantize_mod = None
+
+                if quantize_mod is not None:
+                    try:
+                        qpath = quantize_mod.ensure_or_prompt_quantized(self.model_path, prefer_fp16=use_fp16, cache_dir=cache_dir, interactive=sys.stdin.isatty())
+                        if qpath is not None and Path(str(qpath)).exists() and str(qpath) != self.model_path:
+                            self.model_path = str(qpath)
+                    except Exception as e:
+                        logger.warning("Quantization step failed or skipped: %s", e)
+
             # allow selecting fp16/int8/fp32 variants if present
             self.model_path = _choose_onnx_variant(self.model_path, use_fp16)
             if not os.path.exists(self.model_path):
@@ -169,7 +188,33 @@ class HumanSeg:
                 logger.info("Falling back to CPUExecutionProvider for ONNX Runtime")
                 self.session = ort.InferenceSession(self.model_path, providers=['CPUExecutionProvider'], sess_options=sess_options)
 
-            self.input_name = self.session.get_inputs()[0].name
+            # record input metadata (name and dtype) for proper input casting
+            try:
+                input_meta = self.session.get_inputs()[0]
+                self.input_name = input_meta.name
+                # type is a string like 'tensor(float)'
+                self.input_dtype = str(input_meta.type)
+                # capture input shape info for layout/resize decisions
+                try:
+                    raw_shape = list(input_meta.shape)
+                    # normalize to ints or None
+                    self.session_input_shape = tuple(int(x) if isinstance(x, int) else None for x in raw_shape)
+                except Exception:
+                    self.session_input_shape = None
+                # infer layout
+                layout = None
+                if self.session_input_shape and len(self.session_input_shape) == 4:
+                    if self.session_input_shape[1] == 3:
+                        layout = 'NCHW'
+                    elif self.session_input_shape[3] == 3:
+                        layout = 'NHWC'
+                self.session_input_layout = layout
+            except Exception:
+                # fallback
+                self.input_name = self.session.get_inputs()[0].name
+                self.input_dtype = 'tensor(float)'
+                self.session_input_shape = None
+                self.session_input_layout = None
 
         elif self.backend == "torch":
             if torch is None:
@@ -289,14 +334,95 @@ class HumanSeg:
             return (pred_mask > threshold).astype(np.uint8) * 255
 
         # ONNX Runtime path (existing behavior)
-        img_resized = cv2.resize(image, self.input_size)
+        # determine target resize from session expected shape if available
+        target_w, target_h = None, None
+        try:
+            if getattr(self, "session_input_shape", None) and getattr(self, "session_input_layout", None):
+                s = self.session_input_shape
+                if self.session_input_layout == 'NCHW':
+                    # shape like (N, C, H, W)
+                    _, _, h, w = s
+                    target_w, target_h = (w, h)
+                elif self.session_input_layout == 'NHWC':
+                    # shape like (N, H, W, C)
+                    _, h, w, _ = s
+                    target_w, target_h = (w, h)
+        except Exception:
+            target_w, target_h = None, None
+
+        if target_w and target_h:
+            img_resized = cv2.resize(image, (int(target_w), int(target_h)))
+        else:
+            img_resized = cv2.resize(image, self.input_size)
+
         img_norm = img_resized.astype(np.float32) / 255.0
-        input_tensor = np.expand_dims(img_norm, axis=0)
+
+        # transpose to NCHW if needed
+        if getattr(self, "session_input_layout", None) == 'NCHW':
+            img_chw = img_norm.transpose(2, 0, 1)
+            input_tensor = np.expand_dims(img_chw, axis=0)
+        else:
+            input_tensor = np.expand_dims(img_norm, axis=0)
+
+        # cast input to expected dtype if session expects float16
+        try:
+            if hasattr(self, "input_dtype") and "float16" in str(self.input_dtype).lower():
+                input_tensor = input_tensor.astype(np.float16)
+        except Exception:
+            pass
 
         outputs = self.session.run(None, {self.input_name: input_tensor})
 
-        pred_mask = outputs[0][0]
-        pred_mask = cv2.resize(pred_mask, (w_orig, h_orig))
+        # robustly extract predicted mask from outputs
+        res = outputs[0]
+        pred_mask = None
+        try:
+            import numpy as _np
+
+            if isinstance(res, _np.ndarray):
+                if res.ndim == 4:
+                    # (N,C,H,W)
+                    arr = res[0]
+                    if arr.ndim == 3:
+                        # (C,H,W) -> take channel 0
+                        pred_mask = arr[0]
+                    else:
+                        pred_mask = _np.squeeze(arr)
+                elif res.ndim == 3:
+                    # could be (N,H,W) or (C,H,W)
+                    if res.shape[0] == 1:
+                        pred_mask = res[0]
+                    else:
+                        pred_mask = res[0]
+                elif res.ndim == 2:
+                    pred_mask = res
+                else:
+                    pred_mask = _np.squeeze(res)
+            else:
+                pred_mask = _np.array(res)
+        except Exception:
+            pred_mask = None
+
+        if pred_mask is None:
+            raise RuntimeError("Unable to interpret model output for prediction")
+
+        # ensure 2D and convert to float32 (opencv may not support float16)
+        try:
+            if pred_mask.ndim == 3 and pred_mask.shape[0] == 1:
+                pred_mask = pred_mask[0]
+            pred_mask = np.ascontiguousarray(pred_mask.astype(np.float32))
+            # if outputs look like logits (outside [0,1]), apply sigmoid
+            try:
+                mx = float(np.nanmax(pred_mask))
+                mn = float(np.nanmin(pred_mask))
+                if mx > 1.01 or mn < -0.01:
+                    pred_mask = 1.0 / (1.0 + np.exp(-pred_mask))
+            except Exception:
+                pass
+            # final resize to original image size
+            pred_mask = cv2.resize(pred_mask, (w_orig, h_orig))
+        except Exception as e:
+            raise RuntimeError(f"Failed to resize prediction map: {e}") from e
 
         return (pred_mask > threshold).astype(np.uint8) * 255
 

@@ -1,0 +1,16 @@
+[build-system]
+requires = ["setuptools>=61.0", "wheel"]
+build-backend = "setuptools.build_meta"
+
+[project]
+name = "jetseg"
+version = "1.0.0"
+description = "Optimized Human Segmentation Library for Jetson and edge devices"
+readme = "README.md"
+requires-python = ">=3.8"
+license = { text = "MIT" }
+authors = [ { name = "Bigkatoan" } ]
+dependencies = [
+  "numpy<2",
+  "opencv-python",
+]

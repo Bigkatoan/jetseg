@@ -1,0 +1,8 @@
+# Minimal runtime requirements for JetSeg
+numpy<2
+opencv-python
+
+# Optional (platform-specific):
+# For CPU users: onnxruntime
+# For Jetson GPU: install the platform-specific onnxruntime-gpu wheel from `libs/` or provider
+# For quantization helpers: onnxruntime, onnx, onnxconverter-common

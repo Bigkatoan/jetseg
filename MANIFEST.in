@@ -1,4 +1,10 @@
-recursive-include jetseg *.onnx
-recursive-include jetseg *.pt
+include README.md
+include LICENSE
+recursive-include jetseg *.py
 recursive-include jetseg *.json
-recursive-include jetseg/model_store *
+recursive-include jetseg *.md
+
+# Exclude large model artifacts and platform-specific wheels from sdist
+global-exclude *.whl
+recursive-exclude libs *
+recursive-exclude jetseg/model_store *.onnx *.pt *.whl

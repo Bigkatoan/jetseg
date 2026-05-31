@@ -1,0 +1,5 @@
+# Track model binaries and platform wheels in Git LFS
+jetseg/jetseg/model_store/** filter=lfs diff=lfs merge=lfs -text
+jetseg/jetseg/**/*.onnx filter=lfs diff=lfs merge=lfs -text
+jetseg/jetseg/**/*.pt filter=lfs diff=lfs merge=lfs -text
+libs/*.whl filter=lfs diff=lfs merge=lfs -text

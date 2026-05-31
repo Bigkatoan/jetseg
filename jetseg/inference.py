@@ -51,23 +51,55 @@ def run_onnx(session, input_name: str, input_tensor: np.ndarray):
     return outputs[0]
 
 
-def save_composite(image: np.ndarray, gt_mask: np.ndarray, pred_mask: np.ndarray, out_path: str, height: int = 480):
-    """Create and save a side-by-side composite: RGB | GT | PRED scaled to `height`."""
-    # scale each column to requested height
-    h = height
-    # ensure single-channel masks -> 3-channel for visualization
+def save_composite(image: np.ndarray, gt_mask: np.ndarray, pred_mask: np.ndarray, out_path: str, height: int = 480, mode: str = "side_by_side"):
+    """Save composite visualization.
+
+    mode: 'side_by_side' (default) produces RGB | GT | PRED horizontally stacked.
+          'overlay' produces a single image where prediction is blended onto the RGB.
+    """
+    h = int(height)
+
     def to_rgb(img_or_mask):
         if img_or_mask.ndim == 2:
             return cv2.cvtColor(img_or_mask, cv2.COLOR_GRAY2BGR)
         return img_or_mask
 
+    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
+
+    if mode == "overlay":
+        # create colored overlay where pred_mask > 0
+        img = image.copy()
+        pm = pred_mask
+        if pm.ndim == 3 and pm.shape[0] == 1:
+            pm = pm[0]
+        if pm.ndim == 3:
+            pm = cv2.cvtColor(pm, cv2.COLOR_BGR2GRAY)
+        mask_bool = (pm > 0).astype(np.uint8)
+        if mask_bool.sum() == 0:
+            # nothing predicted, just resize original
+            ww = int(img.shape[1] * (h / img.shape[0]))
+            comp = cv2.resize(img, (ww, h))
+            cv2.imwrite(out_path, comp)
+            return
+
+        # colored mask (red)
+        color_mask = np.zeros_like(img)
+        color_mask[:] = (0, 0, 255)
+        blended = cv2.addWeighted(img, 0.7, color_mask, 0.3, 0)
+        mask_3ch = np.repeat(mask_bool[:, :, None], 3, axis=2)
+        overlay = np.where(mask_3ch.astype(bool), blended, img)
+        ww = int(overlay.shape[1] * (h / overlay.shape[0]))
+        comp = cv2.resize(overlay, (ww, h))
+        cv2.imwrite(out_path, comp)
+        return
+
+    # default: side_by_side
     cols = [image, to_rgb(gt_mask), to_rgb(pred_mask)]
     resized_cols = []
     for c in cols:
-        hh = int(h)
+        hh = h
         ww = int(c.shape[1] * (hh / c.shape[0]))
         resized_cols.append(cv2.resize(c, (ww, hh)))
 
     comp = np.hstack(resized_cols)
-    Path(out_path).parent.mkdir(parents=True, exist_ok=True)
     cv2.imwrite(out_path, comp)
