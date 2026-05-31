@@ -5,6 +5,7 @@ import cv2
 import os
 import sys
 from pathlib import Path
+import glob
 
 try:
     import torch
@@ -16,7 +17,7 @@ logger = logging.getLogger("jetseg")
 
 
 class HumanSeg:
-    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None, model_path: str | None = None, auto_quantize: bool = True, no_quantize: bool = False):
+    def __init__(self, use_fp16=True, cache_dir=None, backend: str = "onnx", torch_model_path: str | None = None, input_size: tuple | None = None, torch_device: str | None = None, model_name: str | None = None, model_path: str | None = None, auto_quantize: bool = True, no_quantize: bool = False):
         """
         Initialize JetSeg HumanSeg engine.
         :param use_fp16: enable FP16 for providers that support it (useful on Jetson/TensorRT)
@@ -26,9 +27,69 @@ class HumanSeg:
         :param input_size: tuple (W,H) to override model input size
         :param torch_device: explicit torch device name (e.g., 'cuda' or 'cpu') if using torch backend
         """
+        # allow shorthand: HumanSeg("model_name") as a positional convenience
+        if isinstance(use_fp16, str) and model_name is None and model_path is None:
+            # user passed model name as first positional arg
+            model_name = use_fp16
+            use_fp16 = True
+
         # 1. locate bundled ONNX model inside the package (can be overridden)
         current_dir = os.path.dirname(__file__)
         self.model_path = os.path.join(current_dir, "human_seg.onnx")
+        self.model_name = None
+
+        # If caller provided a friendly model name (like 'human_seg_tiny' or 'humanseg/human_seg_tiny'),
+        # try to resolve it via the optional `registry` module, otherwise fall back to scanning
+        # `jetseg/model_store/<task>/<model_name>/` for artifacts. This lets callers do `HumanSeg('human_seg_tiny')`.
+        if model_name and model_path is None:
+            resolved = None
+            # try package registry first (if available)
+            try:
+                from . import registry as _registry
+                if hasattr(_registry, "get_model_path"):
+                    try:
+                        mp = _registry.get_model_path("humanseg", model_name, None)
+                        if mp:
+                            resolved = str(mp)
+                    except Exception:
+                        resolved = None
+            except Exception:
+                resolved = None
+
+            # fallback: scan local model_store tree
+            if resolved is None:
+                try:
+                    model_store_root = os.path.join(current_dir, "model_store")
+                    task = "humanseg"
+                    mod = model_name
+                    if "/" in model_name or "\\" in model_name:
+                        parts = model_name.replace("\\", "/").split("/", 1)
+                        if len(parts) == 2:
+                            task, mod = parts[0], parts[1]
+                    candidate_dir = os.path.join(model_store_root, task, mod)
+                    if os.path.isdir(candidate_dir):
+                        # prefer explicit fp32 variant, then common name, then any onnx, then torch
+                        fp32s = sorted(glob.glob(os.path.join(candidate_dir, "*_fp32.onnx")))
+                        if fp32s:
+                            resolved = fp32s[0]
+                        else:
+                            plain = os.path.join(candidate_dir, "human_seg.onnx")
+                            if os.path.exists(plain):
+                                resolved = plain
+                        if resolved is None:
+                            any_onnx = sorted(glob.glob(os.path.join(candidate_dir, "*.onnx")))
+                            if any_onnx:
+                                resolved = any_onnx[0]
+                        if resolved is None:
+                            any_pt = sorted(glob.glob(os.path.join(candidate_dir, "*.pt"))) + sorted(glob.glob(os.path.join(candidate_dir, "*.pth")))
+                            if any_pt:
+                                resolved = any_pt[0]
+                except Exception:
+                    resolved = None
+
+            if resolved is not None:
+                self.model_path = str(resolved)
+                self.model_name = model_name
         # quantize flags
         self.auto_quantize = bool(auto_quantize)
         self.no_quantize = bool(no_quantize)
@@ -364,67 +425,142 @@ class HumanSeg:
         else:
             input_tensor = np.expand_dims(img_norm, axis=0)
 
-        # cast input to expected dtype if session expects float16
+        # Build candidate input tensors with different channel orders / normalizations
+        # to handle models trained with different preprocessing (BGR vs RGB, ImageNet norm).
+        candidates = []  # list of (label, tensor)
+
+        # base normalized image in HWC range [0,1]
+        base_hwc = img_norm
+
+        def _make_tensor_from_hwc(hwc):
+            if getattr(self, "session_input_layout", None) == 'NCHW':
+                arr = hwc.transpose(2, 0, 1)
+                return np.expand_dims(arr, axis=0)
+            return np.expand_dims(hwc, axis=0)
+
+        # Candidate A: BGR [0,1]
         try:
-            if hasattr(self, "input_dtype") and "float16" in str(self.input_dtype).lower():
-                input_tensor = input_tensor.astype(np.float16)
+            candidates.append(("bgr_0_1", _make_tensor_from_hwc(base_hwc)))
         except Exception:
             pass
 
-        outputs = self.session.run(None, {self.input_name: input_tensor})
-
-        # robustly extract predicted mask from outputs
-        res = outputs[0]
-        pred_mask = None
+        # Candidate B: RGB [0,1]
         try:
-            import numpy as _np
-
-            if isinstance(res, _np.ndarray):
-                if res.ndim == 4:
-                    # (N,C,H,W)
-                    arr = res[0]
-                    if arr.ndim == 3:
-                        # (C,H,W) -> take channel 0
-                        pred_mask = arr[0]
-                    else:
-                        pred_mask = _np.squeeze(arr)
-                elif res.ndim == 3:
-                    # could be (N,H,W) or (C,H,W)
-                    if res.shape[0] == 1:
-                        pred_mask = res[0]
-                    else:
-                        pred_mask = res[0]
-                elif res.ndim == 2:
-                    pred_mask = res
-                else:
-                    pred_mask = _np.squeeze(res)
-            else:
-                pred_mask = _np.array(res)
+            base_rgb = base_hwc[..., ::-1]
+            candidates.append(("rgb_0_1", _make_tensor_from_hwc(base_rgb)))
         except Exception:
-            pred_mask = None
+            pass
 
-        if pred_mask is None:
+        # Candidate C: RGB normalized with ImageNet mean/std
+        try:
+            mean = np.array([0.485, 0.456, 0.406], dtype=np.float32)
+            std = np.array([0.229, 0.224, 0.225], dtype=np.float32)
+            rgb = base_hwc[..., ::-1]
+            rgb_norm = (rgb - mean[None, None, :]) / std[None, None, :]
+            candidates.append(("rgb_imagenet", _make_tensor_from_hwc(rgb_norm)))
+        except Exception:
+            pass
+
+        # cast input to expected dtype if session expects float16
+        try:
+            wants_fp16 = hasattr(self, "input_dtype") and "float16" in str(self.input_dtype).lower()
+        except Exception:
+            wants_fp16 = False
+
+        # helper: run session and return probability map resized to original image
+        def _infer_prob_map(in_tensor):
+            outs = self.session.run(None, {self.input_name: in_tensor})
+            res0 = outs[0]
+            pm = None
+            try:
+                import numpy as _np
+
+                if isinstance(res0, _np.ndarray):
+                    # remove batch if present
+                    if res0.ndim == 4:
+                        arr = res0[0]
+                        # arr can be CHW (C,H,W) or HWC (H,W,C)
+                        if arr.ndim == 3:
+                            # channel-last (H,W,C)
+                            if arr.shape[-1] in (1, 3):
+                                pm = arr[..., 0]
+                            # channel-first (C,H,W)
+                            elif arr.shape[0] in (1, 3):
+                                pm = arr[0]
+                            else:
+                                pm = _np.squeeze(arr)
+                        else:
+                            pm = _np.squeeze(arr)
+                    elif res0.ndim == 3:
+                        # could be (C,H,W) or (H,W,C)
+                        if res0.shape[0] in (1, 3):
+                            pm = res0[0]
+                        elif res0.shape[-1] in (1, 3):
+                            pm = res0[..., 0]
+                        else:
+                            pm = _np.squeeze(res0)
+                    elif res0.ndim == 2:
+                        pm = res0
+                    else:
+                        pm = _np.squeeze(res0)
+                else:
+                    pm = _np.array(res0)
+            except Exception:
+                pm = None
+
+            if pm is None:
+                return None
+
+            # normalize to float32
+            try:
+                if pm.ndim == 3 and pm.shape[0] == 1:
+                    pm = pm[0]
+                pm = np.ascontiguousarray(pm.astype(np.float32))
+                # if logits -> sigmoid
+                try:
+                    mx = float(np.nanmax(pm))
+                    mn = float(np.nanmin(pm))
+                    if mx > 1.01 or mn < -0.01:
+                        pm = 1.0 / (1.0 + np.exp(-pm))
+                except Exception:
+                    pass
+                pm = cv2.resize(pm, (w_orig, h_orig))
+                return pm
+            except Exception:
+                return None
+
+        # Try candidates and pick the one with largest foreground area
+        best_pm = None
+        best_area = -1.0
+        for label, cand in candidates:
+            try:
+                cand_tensor = cand.astype(np.float16) if wants_fp16 else cand.astype(np.float32)
+            except Exception:
+                cand_tensor = cand
+            pm = _infer_prob_map(cand_tensor)
+            if pm is None:
+                continue
+            a = float((pm > threshold).sum()) / (pm.shape[0] * pm.shape[1])
+            if a > best_area:
+                best_area = a
+                best_pm = pm
+
+        prob_map = best_pm
+
+        if prob_map is None:
             raise RuntimeError("Unable to interpret model output for prediction")
 
-        # ensure 2D and convert to float32 (opencv may not support float16)
+        # If the chosen prob_map is tiny, try invert if it yields reasonable foreground
         try:
-            if pred_mask.ndim == 3 and pred_mask.shape[0] == 1:
-                pred_mask = pred_mask[0]
-            pred_mask = np.ascontiguousarray(pred_mask.astype(np.float32))
-            # if outputs look like logits (outside [0,1]), apply sigmoid
-            try:
-                mx = float(np.nanmax(pred_mask))
-                mn = float(np.nanmin(pred_mask))
-                if mx > 1.01 or mn < -0.01:
-                    pred_mask = 1.0 / (1.0 + np.exp(-pred_mask))
-            except Exception:
-                pass
-            # final resize to original image size
-            pred_mask = cv2.resize(pred_mask, (w_orig, h_orig))
-        except Exception as e:
-            raise RuntimeError(f"Failed to resize prediction map: {e}") from e
+            total = float(prob_map.shape[0] * prob_map.shape[1])
+            area = float((prob_map > threshold).sum()) / total
+            inv_area = float((prob_map <= threshold).sum()) / total
+            if area < 0.01 and 0.02 < inv_area < 0.95 and inv_area > area:
+                prob_map = 1.0 - prob_map
+        except Exception:
+            pass
 
-        return (pred_mask > threshold).astype(np.uint8) * 255
+        return (prob_map > threshold).astype(np.uint8) * 255
 
     def remove_background(self, image, mask, bg_color=(0, 255, 0)):
         green_bg = np.zeros_like(image)

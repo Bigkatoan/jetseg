@@ -1,0 +1,22 @@
+{
+  "humanseg": {
+    "default": "human_seg_large",
+    "models": {
+      "human_seg_large": {
+        "variants": {
+          "fp32": "model_store/humanseg/human_seg_large/human_seg.onnx"
+        },
+        "preferred_variant": "fp32"
+      },
+      "human_seg_tiny": {
+        "variants": {
+          "fp32": "model_store/humanseg/human_seg_tiny/unet_last_fp32.onnx",
+          "fp16": "model_store/humanseg/human_seg_tiny/unet_last_fp16.onnx",
+          "int8": "model_store/humanseg/human_seg_tiny/unet_last_int8.onnx",
+          "pth": "model_store/humanseg/human_seg_tiny/unet_last.pt"
+        },
+        "preferred_variant": "fp32"
+      }
+    }
+  }
+}
